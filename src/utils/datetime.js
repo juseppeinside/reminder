@@ -1,7 +1,9 @@
 // Функция для получения текущего московского времени
 function getCurrentMoscowTime() {
-  const currentDate = new Date();
-  return currentDate;
+  const moscowTimeZoneOffset = 3; // Московское время UTC+3
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  return new Date(utc + 3600000 * moscowTimeZoneOffset);
 }
 
 // Функция для получения номера недели в году
