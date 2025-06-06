@@ -10,8 +10,6 @@ const fs = require("fs");
 const axios = require("axios");
 const https = require("https");
 
-// Флаг доступности GigaChat API
-let gigaChatAvailable = false;
 let accessToken = null;
 
 // Функция для получения токена доступа к GigaChat API
@@ -82,7 +80,6 @@ const sendGigaChatRequest = async (accessToken, prompt, userMessage) => {
 // Инициализация токена GigaChat при запуске
 (async () => {
   try {
-    console.log("Инициализация GigaChat API - получение токена доступа...");
     accessToken = await getGigaChatAccessToken();
     if (accessToken) {
       console.log("Токен GigaChat успешно получен!");
@@ -167,11 +164,40 @@ bot.onText(/\/help/, (msg) => {
   sendHelpMessage(chatId);
 });
 
+// Обработчик команды /manual для прямого создания напоминаний
+bot.onText(/\/manual (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  const manualText = match[1];
+
+  try {
+    // Проверяем, что текст содержит обязательные параметры
+    if (!manualText.includes("text=") || !manualText.includes("time=")) {
+      bot.sendMessage(
+        chatId,
+        "Ошибка: необходимо указать как минимум параметры text и time"
+      );
+      return;
+    }
+
+    // Передаем параметры напрямую, без обработки
+    const params = parseReminderParams(manualText);
+    if (params) {
+      saveReminder(chatId, params);
+    }
+  } catch (error) {
+    bot.sendMessage(
+      chatId,
+      `Ошибка при создании напоминания: ${error.message}`
+    );
+  }
+});
+
 // Обработчик команды /users (только для админа)
 bot.onText(/\/users/, (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id; // Получаем ID пользователя
 
-  if (chatId.toString() === adminId) {
+  if (userId.toString() === adminId.toString()) {
     // Сначала получаем количество
     db.get("SELECT COUNT(*) as count FROM users", (err, countRow) => {
       if (err) {
@@ -221,9 +247,10 @@ bot.onText(/\/users/, (msg) => {
 // Обработчик команды /notification (только для админа)
 bot.onText(/\/notification (.+)/, (msg, match) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id; // Получаем ID пользователя
   const notificationText = match[1];
 
-  if (chatId.toString() === adminId) {
+  if (userId.toString() === adminId.toString()) {
     db.all("SELECT id FROM users", (err, users) => {
       if (err) {
         console.error(err);
@@ -475,6 +502,51 @@ text=Текст напоминания&time=ЧЧ:ММ&countInDays=1
      3,
      "minutes"
    )}&countInDays=1
+
+5. Запрос: "Напомни завтра в 18:00 выгулять собаку"
+   Ответ: text=Выгулять собаку&time=18:00&countInDays=1
+
+6. Запрос: "Напомни в 9 утра принять таблетки"
+   Ответ: text=Принять таблетки&time=09:00&countInDays=1
+
+7. Запрос: "Каждый понедельник и пятницу в 9:00 напоминай про планерку"
+Ответ: text=Планерка&time=09:00&countInDays=999999&days=пн,пт
+
+8. Запрос: "напоминай каждый вторник помыть машину в 19:36"
+Ответ: text=Помыть машину&time=19:36&countInDays=999999&days=вт
+
+9. Запрос: "напоминай каждый вторник и четверг помыть машину в 19:36"
+Ответ: text=Помыть машину&time=19:36&countInDays=999999&days=вт,чт
+
+10. Запрос: "Помыть машину каждый день в 19:44"
+Ответ: text=Помыть машину&time=19:44&countInDays=999999
+
+11. Запрос: "Помыть машину в пятницу в 19:47"
+Ответ: text=Помыть машину&time=19:47&countInDays=1&days=пт
+
+12. Запрос: "помыть машину в пятницу и в субботу в 12:00"
+Ответ: text=Помыть машину&time=12:00&countInDays=1&days=пт,сб
+
+13. Запрос: "попей воды каждый день в 13"
+Ответ: text=Попей воды&time=13:00&countInDays=999999
+
+14. Запрос: "ежедневно в 7:30 делать зарядку"
+Ответ: text=Делать зарядку&time=07:30&countInDays=999999
+
+15. Запрос: "каждый день проверять почту в 9:00"
+Ответ: text=Проверять почту&time=09:00&countInDays=999999
+
+16. Запрос: "выпить таблетки каждый день в 10 утра и в 5 вечера"
+Ответ: text=Выпить таблетки&time=10:00,17:00&countInDays=999999
+
+17. Запрос: "выпить воды каждый день в 22"
+Ответ: text=Выпить воды&time=22:00&countInDays=999999
+
+18. Запрос: "принять лекарство в 8"
+Ответ: text=Принять лекарство&time=08:00&countInDays=1
+
+19. Запрос: "раз в 2 недели напоминай про митинг в синтезе в 14:00 каждый вторник"
+Ответ: text=Митинг в синтезе&time=14:00&countInDays=999999&days=вт&countInWeeks=1
 
 ЗАПРОС ПОЛЬЗОВАТЕЛЯ: "${text}"
 
@@ -894,7 +966,13 @@ function parseReminderParams(text) {
 
   // Обработка значения everyWeek
   if (!params.everyWeek) {
-    params.everyWeek = "0"; // Каждую неделю по умолчанию
+    // Проверяем, указан ли параметр countInWeeks, и если да - используем его
+    if (params.countInWeeks) {
+      params.everyWeek = params.countInWeeks;
+      delete params.countInWeeks; // Удаляем лишний параметр
+    } else {
+      params.everyWeek = "0"; // Каждую неделю по умолчанию
+    }
   } else {
     // Преобразование текстовых значений в числовые
     const everyWeekLower = params.everyWeek.toLowerCase();
@@ -998,7 +1076,7 @@ function saveReminder(userId, params) {
 
 // Функция отправки справочного сообщения
 function sendHelpMessage(chatId) {
-  const helpText = `
+  let helpText = `
 Привет! Я бот для отправки уведомлений.
 
 Вы можете создать напоминание двумя способами:
@@ -1012,15 +1090,22 @@ function sendHelpMessage(chatId) {
 2. Используйте структурированный формат:
 text=Текст уведомления&time=14:00&days=пн,чт,пт&countInDays=10&everyWeek=0
 
+3. Используйте команду для прямого создания без обработки текста (только для администратора):
+/manual text=Текст напоминания&time=14:00&countInDays=999999&days=вт&everyWeek=1
+или
+/manual text=Митинг в синтезе&time=14:00&countInDays=999999&days=вт&countInWeeks=1
+`;
+
+  helpText += `
 Параметры структурированного формата:
 - text: Текст уведомления (обязательно)
 - time: Время отправки в формате ЧЧ:ММ, по МСК (обязательно). Можно указать несколько значений через запятую, например: 09:00,12:30,18:00
 - days: Дни недели для отправки (пн,вт,ср,чт,пт,сб,вс), если не указано - каждый день
 - countInDays: Количество отправок (обязательно), для бесконечных отправок укажите 99999
-- everyWeek: Периодичность в неделях:
-  * 0 или "каждую" - каждую неделю
-  * 1 или "через" - через неделю
-  * 2 или "две" - каждые 2 недели и т.д.
+- everyWeek или countInWeeks: Периодичность в неделях:
+  * 0 - каждую неделю
+  * 1 - через неделю
+  * 2 - каждые 2 недели и т.д.
 
 Команды:
 /help - показать эту справку
