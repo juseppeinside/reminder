@@ -296,6 +296,19 @@ function handleCallbacks(bot) {
         // Сохраняем новое уведомление
         await reminderModel.saveReminder(userId, params);
 
+        // Удаляем кнопку сразу после создания уведомления
+        await bot
+          .editMessageReplyMarkup(
+            { inline_keyboard: [] },
+            {
+              chat_id: chatId,
+              message_id: messageId,
+            }
+          )
+          .catch((error) => {
+            console.error("Ошибка при удалении кнопки:", error);
+          });
+
         // Отвечаем на callback-запрос
         bot.answerCallbackQuery(callbackQuery.id, {
           text: "✅ Уведомление успешно создано!",
