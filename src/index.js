@@ -2,13 +2,6 @@ require("dotenv").config();
 
 const config = require("../config");
 
-console.log("Загруженные переменные окружения:", {
-  TELEGRAM_BOT_TOKEN: config.TELEGRAM_BOT_TOKEN
-    ? "установлен"
-    : "не установлен",
-  ADMIN_ID: config.ADMIN_ID ? "установлен" : "не установлен",
-});
-
 const TelegramBot = require("node-telegram-bot-api");
 const cron = require("node-cron");
 const sqlite3 = require("sqlite3").verbose();
@@ -248,7 +241,15 @@ bot.onText(/\/list/, (msg) => {
         }
 
         message += `📝 *Сообщение:* ${reminder.text}\n`;
-        message += `🕒 *Время:* ${reminder.time}\n`;
+
+        // Форматируем время, если оно содержит несколько значений
+        const times = reminder.time.split(",");
+        if (times.length > 1) {
+          message += `🕒 *Время:* ${times.join(", ")}\n`;
+        } else {
+          message += `🕒 *Время:* ${reminder.time}\n`;
+        }
+
         message += `🆔 *ID:* \`${reminder.id}\`\n`;
         message += `⏳ *Осталось дней:* ${remainingDays}\n`;
 
@@ -491,7 +492,7 @@ text=Текст уведомления&time=14:00&days=пн,чт,пт&countInDay
 
 Параметры:
 - text: Текст уведомления (обязательно)
-- time: Время отправки в формате ЧЧ:ММ, по МСК (обязательно)
+- time: Время отправки в формате ЧЧ:ММ, по МСК (обязательно). Можно указать несколько значений через запятую, например: 09:00,12:30,18:00
 - days: Дни недели для отправки (пн,вт,ср,чт,пт,сб,вс), если не указано - каждый день
 - countInDays: Количество отправок (обязательно), для бесконечных отправок укажите 99999
 - everyWeek: Периодичность в неделях:
@@ -536,120 +537,119 @@ function setupReminderScheduler() {
     // Получаем номер недели в году
     const weekNumber = getWeekNumber(moscowTime);
 
-    // Запрос на получение уведомлений для текущего времени
-    db.all(
-      "SELECT * FROM reminders WHERE time = ?",
-      [timeString],
-      (err, reminders) => {
-        if (err) {
-          console.error("Ошибка при получении уведомлений:", err);
+    // Запрос на получение всех уведомлений
+    db.all("SELECT * FROM reminders", [], (err, reminders) => {
+      if (err) {
+        console.error("Ошибка при получении уведомлений:", err);
+        return;
+      }
+
+      reminders.forEach((reminder) => {
+        // Проверяем соответствие текущего времени одному из указанных в уведомлении времен
+        const reminderTimes = reminder.time.split(",");
+        if (!reminderTimes.includes(timeString)) {
           return;
         }
 
-        reminders.forEach((reminder) => {
-          // Проверяем, должно ли уведомление быть отправлено сегодня
-          const reminderDays = reminder.days.split(",");
-          if (!reminderDays.includes(currentDay)) {
-            return;
-          }
+        // Проверяем, должно ли уведомление быть отправлено сегодня
+        const reminderDays = reminder.days.split(",");
+        if (!reminderDays.includes(currentDay)) {
+          return;
+        }
 
-          // Проверяем периодичность недель
-          if (
-            reminder.every_week > 0 &&
-            weekNumber % (parseInt(reminder.every_week) + 1) !== 0
-          ) {
-            return;
-          }
+        // Проверяем периодичность недель
+        if (
+          reminder.every_week > 0 &&
+          weekNumber % (parseInt(reminder.every_week) + 1) !== 0
+        ) {
+          return;
+        }
 
-          // Формируем текст сообщения
-          let messageText = reminder.text;
+        // Формируем текст сообщения
+        let messageText = reminder.text;
 
-          // Отправляем уведомление
-          bot
-            .sendMessage(reminder.user_id, messageText)
-            .then(() => {
-              console.log(
-                `Отправлено уведомление ${reminder.id} пользователю ${reminder.user_id}`
-              );
+        // Отправляем уведомление
+        bot
+          .sendMessage(reminder.user_id, messageText)
+          .then(() => {
+            console.log(
+              `Отправлено уведомление ${reminder.id} пользователю ${reminder.user_id}`
+            );
 
-              // Уменьшаем счетчик отправок
-              if (reminder.count_in_days !== 99999) {
-                const newCount = reminder.count_in_days - 1;
+            // Уменьшаем счетчик отправок
+            if (reminder.count_in_days !== 99999) {
+              const newCount = reminder.count_in_days - 1;
 
-                if (newCount <= 0) {
-                  // Получаем период в текстовом формате
-                  let periodText = "";
-                  const everyWeekValue = parseInt(reminder.every_week);
+              if (newCount <= 0) {
+                // Получаем период в текстовом формате
+                let periodText = "";
+                const everyWeekValue = parseInt(reminder.every_week);
 
-                  if (everyWeekValue === 0) {
-                    periodText = "каждую неделю";
-                  } else if (everyWeekValue === 1) {
-                    periodText = "через неделю";
-                  } else if (everyWeekValue >= 2) {
-                    periodText = `каждые ${everyWeekValue + 1} недели`;
-                  }
-
-                  // Уведомляем пользователя о завершении
-                  const completionMessage = `\n\n⚠️ *Это было последнее уведомление из серии!*\n`;
-
-                  const replyMarkup = {
-                    inline_keyboard: [
-                      [
-                        {
-                          text: "📝 Создать такое же уведомление еще на 1 день?",
-                          callback_data: `recreate_${reminder.id}`,
-                        },
-                      ],
-                    ],
-                  };
-
-                  bot.sendMessage(reminder.user_id, completionMessage, {
-                    parse_mode: "Markdown",
-                    reply_markup: replyMarkup,
-                  });
-
-                  // Сохраняем шаблон уведомления в базе для восстановления
-                  const templateId = `template_${reminder.id}`;
-                  db.run(
-                    "INSERT OR REPLACE INTO reminder_templates (id, user_id, text, time, days, every_week) VALUES (?, ?, ?, ?, ?, ?)",
-                    [
-                      templateId,
-                      reminder.user_id,
-                      reminder.text,
-                      reminder.time,
-                      reminder.days,
-                      reminder.every_week,
-                    ],
-                    (err) => {
-                      if (err) {
-                        console.error(
-                          "Ошибка при сохранении шаблона уведомления:",
-                          err
-                        );
-                      }
-                    }
-                  );
-
-                  // Удаляем уведомление, если достигнут лимит отправок
-                  db.run("DELETE FROM reminders WHERE id = ?", [reminder.id]);
-                } else {
-                  // Обновляем счетчик
-                  db.run(
-                    "UPDATE reminders SET count_in_days = ? WHERE id = ?",
-                    [newCount, reminder.id]
-                  );
+                if (everyWeekValue === 0) {
+                  periodText = "каждую неделю";
+                } else if (everyWeekValue === 1) {
+                  periodText = "через неделю";
+                } else if (everyWeekValue >= 2) {
+                  periodText = `каждые ${everyWeekValue + 1} недели`;
                 }
+
+                // Уведомляем пользователя о завершении
+                const completionMessage = `\n\n⚠️ *Это было последнее уведомление из серии!*\n`;
+
+                const replyMarkup = {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: "📝 Создать такое же уведомление еще на 1 отправку?",
+                        callback_data: `recreate_${reminder.id}`,
+                      },
+                    ],
+                  ],
+                };
+
+                bot.sendMessage(reminder.user_id, completionMessage, {
+                  parse_mode: "Markdown",
+                  reply_markup: replyMarkup,
+                });
+
+                // Сохраняем шаблон уведомления в базе для восстановления
+                const templateId = `template_${reminder.id}`;
+                db.run(
+                  "INSERT OR REPLACE INTO reminder_templates (id, user_id, text, time, days, every_week) VALUES (?, ?, ?, ?, ?, ?)",
+                  [
+                    templateId,
+                    reminder.user_id,
+                    reminder.text,
+                    reminder.time,
+                    reminder.days,
+                    reminder.every_week,
+                  ],
+                  (err) => {
+                    if (err) {
+                      console.error(
+                        "Ошибка при сохранении шаблона уведомления:",
+                        err
+                      );
+                    }
+                  }
+                );
+
+                // Удаляем уведомление, если достигнут лимит отправок
+                db.run("DELETE FROM reminders WHERE id = ?", [reminder.id]);
+              } else {
+                // Обновляем счетчик
+                db.run("UPDATE reminders SET count_in_days = ? WHERE id = ?", [
+                  newCount,
+                  reminder.id,
+                ]);
               }
-            })
-            .catch((error) => {
-              console.error(
-                `Ошибка отправки уведомления ${reminder.id}:`,
-                error
-              );
-            });
-        });
-      }
-    );
+            }
+          })
+          .catch((error) => {
+            console.error(`Ошибка отправки уведомления ${reminder.id}:`, error);
+          });
+      });
+    });
   });
 }
 
