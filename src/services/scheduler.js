@@ -100,10 +100,19 @@ function setupReminderScheduler(bot) {
           }
 
           // Отправляем уведомление
-          await bot.sendMessage(reminder.user_id, messageText);
-          console.log(
-            `Отправлено уведомление ${reminder.id} пользователю ${reminder.user_id}`
-          );
+          try {
+            await bot.sendMessage(reminder.user_id, messageText);
+            console.log(
+              `Отправлено уведомление ${reminder.id} пользователю ${reminder.user_id}`
+            );
+          } catch (sendError) {
+            console.error(
+              `Ошибка при отправке уведомления ${reminder.id} пользователю ${reminder.user_id}:`,
+              sendError.message
+            );
+            // Продолжаем выполнение, чтобы обработать остальные напоминания
+            continue;
+          }
 
           // Уменьшаем счетчик отправок
           if (reminder.count_in_days !== 99999) {
@@ -136,10 +145,18 @@ function setupReminderScheduler(bot) {
                 ],
               };
 
-              await bot.sendMessage(reminder.user_id, completionMessage, {
-                parse_mode: "Markdown",
-                reply_markup: replyMarkup,
-              });
+              // Отправляем временное сообщение о подтверждении
+              try {
+                await bot.sendMessage(reminder.user_id, completionMessage, {
+                  parse_mode: "Markdown",
+                  reply_markup: replyMarkup,
+                });
+              } catch (sendError) {
+                console.error(
+                  `Ошибка при отправке сообщения о завершении напоминания ${reminder.id}:`,
+                  sendError.message
+                );
+              }
 
               // Сохраняем шаблон уведомления в базе для восстановления
               const templateId = `template_${reminder.id}`;

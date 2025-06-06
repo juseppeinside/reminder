@@ -19,10 +19,54 @@ function handleMessages(bot) {
           if (params) {
             const reminder = await reminderModel.saveReminder(chatId, params);
 
-            // Отправляем сообщение об успешном создании
-            bot.sendMessage(chatId, `✅ Напоминание создано!`, {
-              parse_mode: "Markdown",
-            });
+            // Создаем кнопку "Удалить"
+            const replyMarkup = {
+              inline_keyboard: [
+                [
+                  {
+                    text: "🗑️ Удалить",
+                    callback_data: `delete_reminder_${reminder.id}`,
+                  },
+                ],
+              ],
+            };
+
+            // Отправляем сообщение об успешном создании с кнопкой удаления
+            const sentMessage = await bot.sendMessage(
+              chatId,
+              `✅ Напоминание создано!`,
+              {
+                parse_mode: "Markdown",
+                reply_markup: replyMarkup,
+              }
+            );
+
+            // Устанавливаем таймер на удаление кнопки через 10 секунд
+            setTimeout(() => {
+              try {
+                // Проверяем, существует ли сообщение перед редактированием
+                bot
+                  .getChat(chatId)
+                  .then(() => {
+                    // Пытаемся получить сообщение перед его редактированием
+                    return bot.editMessageReplyMarkup(
+                      { inline_keyboard: [] },
+                      {
+                        chat_id: chatId,
+                        message_id: sentMessage.message_id,
+                      }
+                    );
+                  })
+                  .catch((err) => {
+                    // Если сообщение не найдено, значит оно уже удалено
+                    console.log(
+                      `Сообщение ${sentMessage.message_id} уже удалено или недоступно для редактирования`
+                    );
+                  });
+              } catch (error) {
+                console.error("Ошибка при удалении кнопки:", error);
+              }
+            }, 10000);
           }
         } else {
           console.log(`Обрабатываем сообщение от пользователя: "${text}"`);
@@ -49,12 +93,55 @@ function handleMessages(bot) {
                   params
                 );
 
-                // Отправляем сообщение об успешном создании
-                bot.sendMessage(
+                // Создаем кнопку "Удалить"
+                const replyMarkup = {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: "🗑️ Удалить",
+                        callback_data: `delete_reminder_${reminder.id}`,
+                      },
+                    ],
+                  ],
+                };
+
+                // Отправляем сообщение об успешном создании с подробной информацией и кнопкой удаления
+                const sentMessage = await bot.sendMessage(
                   chatId,
                   `✅ Напоминание создано!\n\n🆔 ID: \`${reminder.id}\`\n📝 Текст: ${params.text}\n🕒 Время: ${params.time}\n📅 Дни: ${params.days}\n⏳ Количество отправок: ${reminder.count_in_days}`,
-                  { parse_mode: "Markdown" }
+                  {
+                    parse_mode: "Markdown",
+                    reply_markup: replyMarkup,
+                  }
                 );
+
+                // Устанавливаем таймер на удаление кнопки через 10 секунд
+                setTimeout(() => {
+                  try {
+                    // Проверяем, существует ли сообщение перед редактированием
+                    bot
+                      .getChat(chatId)
+                      .then(() => {
+                        // Пытаемся получить сообщение перед его редактированием
+                        return bot.editMessageReplyMarkup(
+                          { inline_keyboard: [] },
+                          {
+                            chat_id: chatId,
+                            message_id: sentMessage.message_id,
+                          }
+                        );
+                      })
+                      .catch((err) => {
+                        // Если сообщение не найдено, значит оно уже удалено
+                        console.log(
+                          `Сообщение ${sentMessage.message_id} уже удалено или недоступно для редактирования`
+                        );
+                      });
+                  } catch (error) {
+                    console.error("Ошибка при удалении кнопки:", error);
+                  }
+                }, 10000);
+
                 return;
               }
             } else {
@@ -79,10 +166,54 @@ function handleMessages(bot) {
             if (params) {
               const reminder = await reminderModel.saveReminder(chatId, params);
 
-              // Отправляем сообщение об успешном создании
-              bot.sendMessage(chatId, `✅ Напоминание создано!`, {
-                parse_mode: "Markdown",
-              });
+              // Создаем кнопку "Удалить"
+              const replyMarkup = {
+                inline_keyboard: [
+                  [
+                    {
+                      text: "🗑️ Удалить",
+                      callback_data: `delete_reminder_${reminder.id}`,
+                    },
+                  ],
+                ],
+              };
+
+              // Отправляем сообщение об успешном создании с кнопкой удаления
+              const sentMessage = await bot.sendMessage(
+                chatId,
+                `✅ Напоминание создано!`,
+                {
+                  parse_mode: "Markdown",
+                  reply_markup: replyMarkup,
+                }
+              );
+
+              // Устанавливаем таймер на удаление кнопки через 10 секунд
+              setTimeout(() => {
+                try {
+                  // Проверяем, существует ли сообщение перед редактированием
+                  bot
+                    .getChat(chatId)
+                    .then(() => {
+                      // Пытаемся получить сообщение перед его редактированием
+                      return bot.editMessageReplyMarkup(
+                        { inline_keyboard: [] },
+                        {
+                          chat_id: chatId,
+                          message_id: sentMessage.message_id,
+                        }
+                      );
+                    })
+                    .catch((err) => {
+                      // Если сообщение не найдено, значит оно уже удалено
+                      console.log(
+                        `Сообщение ${sentMessage.message_id} уже удалено или недоступно для редактирования`
+                      );
+                    });
+                } catch (error) {
+                  console.error("Ошибка при удалении кнопки:", error);
+                }
+              }, 10000);
             }
           }
         }
@@ -99,9 +230,42 @@ function handleCallbacks(bot) {
     const msg = callbackQuery.message;
     const data = callbackQuery.data;
     const userId = callbackQuery.from.id;
+    const chatId = msg.chat.id;
+    const messageId = msg.message_id;
 
+    // Обработка нажатия на кнопку удаления сообщения и напоминания
+    if (data.startsWith("delete_reminder_")) {
+      try {
+        // Извлекаем ID напоминания из данных callback
+        const reminderId = data.replace("delete_reminder_", "");
+
+        // Сначала отвечаем на callback-запрос с временным уведомлением в интерфейсе Telegram
+        await bot.answerCallbackQuery(callbackQuery.id, {
+          text: "Напоминание удалено",
+          show_alert: false,
+        });
+
+        // Удаляем напоминание из базы данных
+        await reminderModel
+          .deleteReminder(reminderId, userId)
+          .catch((error) => {
+            console.error(
+              "Ошибка при удалении напоминания из базы данных:",
+              error
+            );
+          });
+
+        // Затем удаляем сообщение без отправки дополнительного подтверждения
+        await bot.deleteMessage(chatId, messageId).catch((error) => {
+          console.error("Ошибка при удалении сообщения:", error);
+          // Не отправляем уведомление об ошибке пользователю
+        });
+      } catch (error) {
+        console.error("Ошибка при обработке запроса удаления:", error);
+      }
+    }
     // Обработка нажатия на кнопку воссоздания уведомления
-    if (data.startsWith("recreate_")) {
+    else if (data.startsWith("recreate_")) {
       const reminderId = data.replace("recreate_", "");
       const templateId = `template_${reminderId}`;
 

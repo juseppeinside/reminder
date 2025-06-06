@@ -42,10 +42,54 @@ function handleManual(bot) {
       if (params) {
         const reminder = await reminderModel.saveReminder(chatId, params);
 
-        // Отправляем сообщение об успешном создании
-        bot.sendMessage(chatId, `✅ Напоминание создано!`, {
-          parse_mode: "Markdown",
-        });
+        // Создаем кнопку "Удалить"
+        const replyMarkup = {
+          inline_keyboard: [
+            [
+              {
+                text: "🗑️ Удалить",
+                callback_data: `delete_message`,
+              },
+            ],
+          ],
+        };
+
+        // Отправляем сообщение об успешном создании с кнопкой удаления
+        const sentMessage = await bot.sendMessage(
+          chatId,
+          `✅ Напоминание создано!`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: replyMarkup,
+          }
+        );
+
+        // Устанавливаем таймер на удаление кнопки через 10 секунд
+        setTimeout(() => {
+          try {
+            // Проверяем, существует ли сообщение перед редактированием
+            bot
+              .getChat(chatId)
+              .then(() => {
+                // Пытаемся получить сообщение перед его редактированием
+                return bot.editMessageReplyMarkup(
+                  { inline_keyboard: [] },
+                  {
+                    chat_id: chatId,
+                    message_id: sentMessage.message_id,
+                  }
+                );
+              })
+              .catch((err) => {
+                // Если сообщение не найдено, значит оно уже удалено
+                console.log(
+                  `Сообщение ${sentMessage.message_id} уже удалено или недоступно для редактирования`
+                );
+              });
+          } catch (error) {
+            console.error("Ошибка при удалении кнопки:", error);
+          }
+        }, 10000);
       }
     } catch (error) {
       bot.sendMessage(
