@@ -1,6 +1,6 @@
 {
   "name": "reminder-telegram-bot",
-  "version": "1.0.0",
+  "version": "0.0.3",
   "description": "Telegram bot for sending scheduled reminders",
   "main": "src/index.js",
   "scripts": {
