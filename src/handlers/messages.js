@@ -1,7 +1,6 @@
 const naturalLanguageService = require("../services/natural-language");
 const reminderModel = require("../models/reminders");
 const { parseReminderParams } = require("../utils/reminder-parser");
-const { getWeekPeriodText } = require("../utils/datetime");
 const { sendReminderCreatedMessage } = require("../utils/reminder-utils");
 
 // Обработчик для обычных сообщений
