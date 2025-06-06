@@ -7,6 +7,95 @@ const cron = require("node-cron");
 const sqlite3 = require("sqlite3").verbose();
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
+const axios = require("axios");
+const https = require("https");
+
+// Флаг доступности GigaChat API
+let gigaChatAvailable = false;
+let accessToken = null;
+
+// Функция для получения токена доступа к GigaChat API
+const getGigaChatAccessToken = async () => {
+  try {
+    const response = await axios({
+      method: "post",
+      url: "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        RqUID: uuidv4(),
+        Authorization: `Basic ${config.GIGACHAT_API_KEY}`,
+      },
+      data: `scope=${config.GIGACHAT_SCOPE}`,
+      httpsAgent: new https.Agent({
+        rejectUnauthorized: false, // Для обхода проблемы с самоподписанным сертификатом
+      }),
+    });
+
+    return response.data.access_token;
+  } catch (error) {
+    console.error("Ошибка при получении токена GigaChat:", error.message);
+    return null;
+  }
+};
+
+// Функция для отправки запроса в GigaChat
+const sendGigaChatRequest = async (accessToken, prompt, userMessage) => {
+  try {
+    const chatResponse = await axios({
+      method: "post",
+      url: "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      data: {
+        model: "GigaChat",
+        messages: [
+          {
+            role: "system",
+            content: prompt,
+          },
+          {
+            role: "user",
+            content: userMessage,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 1500,
+        n: 1,
+        stream: false,
+        top_p: 0.95,
+      },
+      httpsAgent: new https.Agent({
+        rejectUnauthorized: false, // Для обхода проблемы с самоподписанным сертификатом
+      }),
+    });
+
+    return chatResponse.data.choices[0].message.content;
+  } catch (error) {
+    console.error("Ошибка при запросе к API GigaChat:", error.message);
+    throw error;
+  }
+};
+
+// Инициализация токена GigaChat при запуске
+(async () => {
+  try {
+    console.log("Инициализация GigaChat API - получение токена доступа...");
+    accessToken = await getGigaChatAccessToken();
+    if (accessToken) {
+      console.log("Токен GigaChat успешно получен!");
+    } else {
+      console.log(
+        "Не удалось получить токен GigaChat при запуске. Будем пытаться получить при обработке сообщений."
+      );
+    }
+  } catch (error) {
+    console.error("Ошибка при получении токена GigaChat:", error.message);
+    console.log("Бот будет пытаться получить токен при обработке сообщений.");
+  }
+})();
 
 // Убедимся, что директория для БД существует
 const dbDir = "./db";
@@ -283,17 +372,442 @@ bot.onText(/\/list/, (msg) => {
   );
 });
 
+function getCurrentMoscowTime() {
+  const currentDate = new Date();
+  return currentDate;
+}
+
+// Функция для обработки запросов на естественном языке через GigaChat
+async function processNaturalLanguageWithGigaChat(text) {
+  try {
+    // Проверяем только наличие токена доступа
+    if (!accessToken) {
+      console.log("Отсутствует токен GigaChat, получаем новый");
+      accessToken = await getGigaChatAccessToken();
+      if (!accessToken) {
+        console.log(
+          "Не удалось получить токен GigaChat, используем локальную обработку"
+        );
+        return parseNaturalLanguage(text);
+      }
+    }
+
+    // Текущее время по МСК
+    const moscowTime = getCurrentMoscowTime();
+    const currentTimeStr = `${moscowTime
+      .getHours()
+      .toString()
+      .padStart(2, "0")}:${moscowTime
+      .getMinutes()
+      .toString()
+      .padStart(2, "0")}`;
+    console.log("Текущее время МСК:", currentTimeStr);
+
+    // Функция для расчета относительного времени
+    const calculateRelativeTime = (date, value, unit) => {
+      const result = new Date(date);
+      if (unit === "minutes") {
+        result.setMinutes(result.getMinutes() + value);
+      } else if (unit === "hours") {
+        result.setHours(result.getHours() + value);
+      }
+      return `${result.getHours().toString().padStart(2, "0")}:${result
+        .getMinutes()
+        .toString()
+        .padStart(2, "0")}`;
+    };
+
+    // Формируем промпт для GigaChat с чёткими инструкциями
+    const prompt = `
+Ты ассистент для приложения напоминаний. Преобразуй запрос пользователя в строго заданный формат.
+
+ТЕКУЩЕЕ ВРЕМЯ: ${currentTimeStr}
+
+ЗАДАЧА:
+Твоя задача - преобразовать текст пользователя в структурированный формат для создания напоминания. 
+Формат ДОЛЖЕН содержать ВСЕ эти параметры: text, time и countInDays.
+
+ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА:
+text=Текст напоминания&time=ЧЧ:ММ&countInDays=1
+
+ПРАВИЛА:
+1. text: Краткий текст напоминания (3-4 слова)
+2. time: Время в формате 24-часов (ЧЧ:ММ)
+   - Для "в 13" используй "13:00"
+   - Для "утром" - "09:00", "днем" - "13:00", "вечером" - "19:00"
+3. countInDays: По умолчанию 1, для "ежедневно/постоянно" - 999999
+4. days: Укажи только если явно упоминаются дни недели: пн, вт, ср, чт, пт, сб, вс
+
+ОЧЕНЬ ВАЖНО: При указании относительного времени "через X минут/часов", рассчитай абсолютное время от текущего момента.
+- Если сейчас ${currentTimeStr}, то "через 5 минут" будет ${calculateRelativeTime(
+      moscowTime,
+      5,
+      "minutes"
+    )}
+- Если сейчас ${currentTimeStr}, то "через 30 минут" будет ${calculateRelativeTime(
+      moscowTime,
+      30,
+      "minutes"
+    )}
+- Если сейчас ${currentTimeStr}, то "через 2 часа" будет ${calculateRelativeTime(
+      moscowTime,
+      2,
+      "hours"
+    )}
+
+ПРИМЕРЫ:
+1. Запрос: "Напомни через 5 минут полить цветы"
+   Ответ: text=Полить цветы&time=${calculateRelativeTime(
+     moscowTime,
+     5,
+     "minutes"
+   )}&countInDays=1
+
+2. Запрос: "Напомни позвонить маме завтра в 18:00"
+   Ответ: text=Позвонить маме&time=18:00&countInDays=1
+
+3. Запрос: "Напоминай каждый вторник пить глютамин в 12"
+   Ответ: text=Пить глютамин&time=12:00&countInDays=999999&days=вт
+
+4. Запрос: "Через 3 минуты напомни позвонить"
+   Ответ: text=Позвонить&time=${calculateRelativeTime(
+     moscowTime,
+     3,
+     "minutes"
+   )}&countInDays=1
+
+ЗАПРОС ПОЛЬЗОВАТЕЛЯ: "${text}"
+
+ВАЖНО: Дай ответ только в указанном формате, без пояснений и дополнительного текста.`;
+
+    console.log("Отправляем запрос в GigaChat:", text);
+
+    try {
+      // Отправляем запрос к GigaChat API
+      const result = await sendGigaChatRequest(accessToken, prompt, text);
+      console.log("Ответ от GigaChat:", result);
+
+      // Дополнительная проверка и коррекция формата ответа
+      let formattedResult = result.trim();
+
+      // Если ответ не содержит необходимых параметров, пытаемся исправить
+      if (
+        !formattedResult.includes("time=") ||
+        !formattedResult.includes("countInDays=")
+      ) {
+        console.log(
+          "Некорректный формат ответа от GigaChat, пытаемся исправить"
+        );
+
+        // Извлекаем текст напоминания, если он есть
+        let reminderText = "";
+        if (formattedResult.includes("text=")) {
+          const textMatch = formattedResult.match(/text=([^&]+)/);
+          if (textMatch) {
+            reminderText = textMatch[1];
+          }
+        } else {
+          // Если текст не указан, используем сам запрос пользователя
+          reminderText = text
+            .replace(/напомни(ть)?|через \d+ (минут|час[а-я]*)/gi, "")
+            .trim();
+        }
+
+        // Используем локальную функцию для определения остальных параметров
+        const localResult = parseNaturalLanguage(text);
+
+        // Извлекаем время и количество дней из локального результата
+        let time = "";
+        let countInDays = "1";
+        let days = "";
+
+        if (localResult.includes("time=")) {
+          const timeMatch = localResult.match(/time=([^&]+)/);
+          if (timeMatch) time = timeMatch[1];
+        }
+
+        if (localResult.includes("countInDays=")) {
+          const daysMatch = localResult.match(/countInDays=([^&]+)/);
+          if (daysMatch) countInDays = daysMatch[1];
+        }
+
+        if (localResult.includes("days=")) {
+          const daysWeekMatch = localResult.match(/days=([^&]+)/);
+          if (daysWeekMatch) days = daysWeekMatch[1];
+        }
+
+        // Формируем корректный ответ
+        formattedResult = `text=${reminderText}&time=${time}&countInDays=${countInDays}`;
+        if (days) formattedResult += `&days=${days}`;
+
+        console.log("Исправленный формат:", formattedResult);
+      }
+
+      return formattedResult;
+    } catch (apiError) {
+      // Если ошибка авторизации, попробуем получить новый токен
+      if (
+        apiError.message.includes("401") ||
+        apiError.message.includes("auth")
+      ) {
+        console.log("Токен устарел, получаем новый");
+        accessToken = await getGigaChatAccessToken();
+
+        if (accessToken) {
+          // Повторяем запрос с новым токеном
+          try {
+            const result = await sendGigaChatRequest(accessToken, prompt, text);
+            console.log("Ответ от GigaChat с новым токеном:", result);
+            return result;
+          } catch (retryError) {
+            console.error(
+              "Ошибка при повторном запросе к GigaChat:",
+              retryError.message
+            );
+            return parseNaturalLanguage(text);
+          }
+        } else {
+          console.log(
+            "Не удалось обновить токен, используем локальную обработку"
+          );
+          return parseNaturalLanguage(text);
+        }
+      }
+
+      console.error("Ошибка при обращении к GigaChat API:", apiError.message);
+      console.log("Используем локальную обработку текста");
+      return parseNaturalLanguage(text);
+    }
+  } catch (error) {
+    console.error(
+      "Общая ошибка при обработке запроса через GigaChat:",
+      error.message
+    );
+    return parseNaturalLanguage(text);
+  }
+}
+
+// Функция для парсинга естественного языка в параметры напоминания (локальная)
+function parseNaturalLanguage(text) {
+  // Текущее время по МСК
+  const moscowTime = getCurrentMoscowTime();
+
+  // Исходный текст запроса для отладки
+  console.log("Обрабатываем запрос:", text);
+  console.log(
+    "Текущее время МСК:",
+    `${moscowTime.getHours().toString().padStart(2, "0")}:${moscowTime
+      .getMinutes()
+      .toString()
+      .padStart(2, "0")}`
+  );
+
+  // Ищем упоминания времени
+  const timeRegex = /в (\d{1,2})[:\.]?(\d{2})?/g;
+  const timeMatches = [...text.matchAll(timeRegex)];
+
+  let reminderTime = "";
+  if (timeMatches.length > 0) {
+    const times = timeMatches.map((match) => {
+      const hours = match[1].padStart(2, "0");
+      const minutes = match[2] ? match[2] : "00";
+      return `${hours}:${minutes}`;
+    });
+
+    reminderTime = times.join(",");
+  }
+
+  // Если время не найдено, проверяем указания на "утром", "днем", "вечером", "ночью"
+  if (!reminderTime) {
+    if (text.includes("утром")) reminderTime = "09:00";
+    else if (text.includes("днем") || text.includes("днём"))
+      reminderTime = "13:00";
+    else if (text.includes("вечером")) reminderTime = "19:00";
+    else if (text.includes("ночью")) reminderTime = "23:00";
+  }
+
+  // Проверяем относительное время
+  const relativeTimeRegex = /через (\d+) ?(минут|час[а-я]*)/i;
+  const relativeMatch = text.match(relativeTimeRegex);
+
+  if (relativeMatch) {
+    const value = parseInt(relativeMatch[1]);
+    const unit = relativeMatch[2];
+
+    const relativeTime = new Date(moscowTime);
+
+    if (unit.startsWith("минут")) {
+      relativeTime.setMinutes(relativeTime.getMinutes() + value);
+    } else if (unit.startsWith("час")) {
+      relativeTime.setHours(relativeTime.getHours() + value);
+    }
+
+    // Форматируем время в формат ЧЧ:ММ
+    const hours = relativeTime.getHours().toString().padStart(2, "0");
+    const minutes = relativeTime.getMinutes().toString().padStart(2, "0");
+    reminderTime = `${hours}:${minutes}`;
+    console.log(
+      `Установлено относительное время: через ${value} ${unit} → ${reminderTime}`
+    );
+  }
+
+  // Если время не удалось определить, используем текущее время + 5 минут
+  if (!reminderTime) {
+    const defaultTime = new Date(moscowTime);
+    defaultTime.setMinutes(defaultTime.getMinutes() + 5);
+
+    const hours = defaultTime.getHours().toString().padStart(2, "0");
+    const minutes = defaultTime.getMinutes().toString().padStart(2, "0");
+    reminderTime = `${hours}:${minutes}`;
+  }
+
+  // Определяем дни недели
+  let reminderDays = "пн,вт,ср,чт,пт,сб,вс"; // По умолчанию все дни
+  let countInDays = "1"; // По умолчанию одна отправка
+
+  // Словарь для маппинга дней недели
+  const daysMapping = {
+    понедельник: "пн",
+    вторник: "вт",
+    среду: "ср",
+    среда: "ср",
+    четверг: "чт",
+    пятницу: "пт",
+    пятница: "пт",
+    субботу: "сб",
+    суббота: "сб",
+    воскресенье: "вс",
+  };
+
+  // Проверяем наличие дней недели в тексте
+  const dayMatches = Object.keys(daysMapping).filter((day) =>
+    text.toLowerCase().includes(day.toLowerCase())
+  );
+
+  if (dayMatches.length > 0) {
+    // Если упоминается "каждый" или "по", это повторяющееся напоминание
+    const isRecurring = text.match(/(кажд[а-я]+|по|еженедельно|регулярно)/i);
+
+    if (isRecurring) {
+      countInDays = "99999"; // Бесконечное число отправок
+      reminderDays = dayMatches.map((day) => daysMapping[day]).join(",");
+    } else {
+      // Одноразовое напоминание на конкретный день
+      countInDays = "1";
+      reminderDays = dayMatches.map((day) => daysMapping[day]).join(",");
+    }
+  }
+
+  // Проверяем "каждый день", "ежедневно", "бесконечно" и т.д.
+  if (text.match(/(кажд[а-я]+ день|ежедневно|бесконечно|всегда|постоянно)/i)) {
+    countInDays = "99999";
+  }
+
+  // Проверяем "завтра"
+  if (text.toLowerCase().includes("завтра")) {
+    const tomorrow = new Date(moscowTime);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const tomorrowDay = tomorrow.getDay();
+    const daysMap = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+
+    reminderDays = daysMap[tomorrowDay];
+    countInDays = "1"; // Одноразовое
+  }
+
+  // Извлекаем суть напоминания (убираем служебные слова)
+  let reminderText = text
+    .replace(/напомни(ть)?/i, "")
+    .replace(/через \d+ (минут|час[а-я]*)/gi, "")
+    .replace(/в \d{1,2}[:\.]?\d{0,2}/g, "")
+    .replace(/(завтра|сегодня|послезавтра)/gi, "")
+    .replace(/(утром|днем|днём|вечером|ночью)/gi, "")
+    .replace(/(каждый|кажд[а-я]+|ежедневно|еженедельно|по|регулярно)/gi, "");
+
+  // Убираем упоминания дней недели
+  Object.keys(daysMapping).forEach((day) => {
+    reminderText = reminderText.replace(new RegExp(day, "gi"), "");
+  });
+
+  // Удаляем лишние пробелы и знаки препинания
+  reminderText = reminderText
+    .replace(/\s+/g, " ")
+    .replace(/^\s+|\s+$|\s+(?=\W)/g, "")
+    .trim();
+
+  // Если текст слишком короткий, используем стандартный
+  if (reminderText.length < 3) {
+    reminderText = "Напоминание";
+  }
+
+  // Формируем итоговую строку в нужном формате
+  const result = `text=${reminderText}&time=${reminderTime}&countInDays=${countInDays}`;
+
+  // Добавляем дни, если они не стандартные
+  if (reminderDays !== "пн,вт,ср,чт,пт,сб,вс") {
+    return `${result}&days=${reminderDays}`;
+  }
+
+  return result;
+}
+
 // Обработчик для создания уведомления
-bot.on("message", (msg) => {
+bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
   // Игнорируем команды
   if (text && !text.startsWith("/")) {
     try {
-      const params = parseReminderParams(text);
-      if (params) {
-        saveReminder(chatId, params);
+      // Проверяем формат сообщения
+      if (text.includes("=") && text.includes("&")) {
+        // Стандартный формат text=текст&time=время
+        const params = parseReminderParams(text);
+        if (params) {
+          saveReminder(chatId, params);
+        }
+      } else {
+        console.log(`Обрабатываем сообщение от пользователя: "${text}"`);
+
+        // Сначала пробуем обработать через GigaChat
+        try {
+          console.log("Начинаем обработку через GigaChat API");
+          const formattedText = await processNaturalLanguageWithGigaChat(text);
+          console.log("Преобразовано в формат (GigaChat):", formattedText);
+
+          // Проверяем, что ответ соответствует нашему формату
+          if (
+            formattedText &&
+            formattedText.includes("text=") &&
+            formattedText.includes("time=")
+          ) {
+            const params = parseReminderParams(formattedText);
+            if (params) {
+              saveReminder(chatId, params);
+              return;
+            }
+          } else {
+            console.log(
+              "Ответ GigaChat не соответствует ожидаемому формату. Используем локальную обработку."
+            );
+            throw new Error("Некорректный формат ответа от GigaChat");
+          }
+        } catch (gigaChatError) {
+          console.error(
+            "Ошибка при обработке через GigaChat:",
+            gigaChatError.message
+          );
+          console.log("Используем локальную функцию обработки текста");
+
+          // Если GigaChat не сработал, используем локальную функцию
+          const formattedText = parseNaturalLanguage(text);
+          console.log("Преобразовано в формат (локально):", formattedText);
+
+          const params = parseReminderParams(formattedText);
+          if (params) {
+            saveReminder(chatId, params);
+          }
+        }
       }
     } catch (error) {
       bot.sendMessage(chatId, `Ошибка: ${error.message}`);
@@ -487,10 +1001,18 @@ function sendHelpMessage(chatId) {
   const helpText = `
 Привет! Я бот для отправки уведомлений.
 
-Чтобы создать уведомление, отправьте сообщение в формате:
+Вы можете создать напоминание двумя способами:
+
+1. Напишите запрос на естественном языке, например:
+   - "Напомни завтра в 18:00 выгулять собаку"
+   - "Напомни в 9 утра принять таблетки"
+   - "Напомни мне каждый понедельник в 10:00 про планерку"
+   - "Через 30 минут напомни про встречу"
+
+2. Используйте структурированный формат:
 text=Текст уведомления&time=14:00&days=пн,чт,пт&countInDays=10&everyWeek=0
 
-Параметры:
+Параметры структурированного формата:
 - text: Текст уведомления (обязательно)
 - time: Время отправки в формате ЧЧ:ММ, по МСК (обязательно). Можно указать несколько значений через запятую, например: 09:00,12:30,18:00
 - days: Дни недели для отправки (пн,вт,ср,чт,пт,сб,вс), если не указано - каждый день
@@ -514,10 +1036,10 @@ text=Текст уведомления&time=14:00&days=пн,чт,пт&countInDay
 function setupReminderScheduler() {
   // Запускаем проверку каждую минуту
   cron.schedule("* * * * *", () => {
-    const now = new Date();
-    const moscowTime = new Date(now.getTime() + 3 * 60 * 60 * 1000); // МСК = UTC+3
-    const currentHour = moscowTime.getUTCHours();
-    const currentMinute = moscowTime.getUTCMinutes();
+    // Получаем текущее московское время
+    const moscowTime = getCurrentMoscowTime();
+    const currentHour = moscowTime.getHours();
+    const currentMinute = moscowTime.getMinutes();
     const timeString = `${currentHour
       .toString()
       .padStart(2, "0")}:${currentMinute.toString().padStart(2, "0")}`;
@@ -532,7 +1054,7 @@ function setupReminderScheduler() {
       5: "пт",
       6: "сб",
     };
-    const currentDay = daysMap[moscowTime.getUTCDay()];
+    const currentDay = daysMap[moscowTime.getDay()];
 
     // Получаем номер недели в году
     const weekNumber = getWeekNumber(moscowTime);
