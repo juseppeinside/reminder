@@ -3,6 +3,21 @@ const reminderModel = require("../models/reminders");
 const { parseReminderParams } = require("../utils/reminder-parser");
 const { getWeekPeriodText } = require("../utils/datetime");
 
+// Добавляем функцию форматирования информации о напоминании
+function formatReminderInfo(params, reminder) {
+  // Проверяем, содержит ли строка дней все дни недели
+  const allDays = "пн,вт,ср,чт,пт,сб,вс";
+  const sortedDays = params.days.split(",").sort().join(",");
+  const sortedAllDays = allDays.split(",").sort().join(",");
+
+  // Если указаны все дни недели, не показываем поле "Дни"
+  if (sortedDays === sortedAllDays) {
+    return `📝 Текст: ${params.text}\n🕒 Время: ${params.time}\n⏳ Количество отправок: ${reminder.count_in_days}`;
+  } else {
+    return `📝 Текст: ${params.text}\n🕒 Время: ${params.time}\n📅 Дни: ${params.days}\n⏳ Количество отправок: ${reminder.count_in_days}`;
+  }
+}
+
 // Обработчик для обычных сообщений
 function handleMessages(bot) {
   bot.on("message", async (msg) => {
@@ -34,7 +49,10 @@ function handleMessages(bot) {
             // Отправляем сообщение об успешном создании с кнопкой удаления
             const sentMessage = await bot.sendMessage(
               chatId,
-              `✅ Напоминание создано!`,
+              `✅ Напоминание создано!\n\n${formatReminderInfo(
+                params,
+                reminder
+              )}`,
               {
                 parse_mode: "Markdown",
                 reply_markup: replyMarkup,
@@ -110,7 +128,10 @@ function handleMessages(bot) {
                 // Отправляем сообщение об успешном создании с подробной информацией и кнопкой удаления
                 const sentMessage = await bot.sendMessage(
                   chatId,
-                  `✅ Напоминание создано!\n\n📝 Текст: ${params.text}\n🕒 Время: ${params.time}\n📅 Дни: ${params.days}\n⏳ Количество отправок: ${reminder.count_in_days}`,
+                  `✅ Напоминание создано!\n\n${formatReminderInfo(
+                    params,
+                    reminder
+                  )}`,
                   {
                     parse_mode: "Markdown",
                     reply_markup: replyMarkup,
@@ -185,7 +206,10 @@ function handleMessages(bot) {
               // Отправляем сообщение об успешном создании с кнопкой удаления
               const sentMessage = await bot.sendMessage(
                 chatId,
-                `✅ Напоминание создано!`,
+                `✅ Напоминание создано!\n\n${formatReminderInfo(
+                  params,
+                  reminder
+                )}`,
                 {
                   parse_mode: "Markdown",
                   reply_markup: replyMarkup,

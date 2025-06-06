@@ -4,6 +4,22 @@ const reminderModel = require("../models/reminders");
 const { parseReminderParams } = require("../utils/reminder-parser");
 const { getWeekPeriodText } = require("../utils/datetime");
 
+// Импортируем функцию форматирования из messages.js
+// Создаем локальную версию функции, чтобы избежать циклических зависимостей
+function formatReminderInfo(params, reminder) {
+  // Проверяем, содержит ли строка дней все дни недели
+  const allDays = "пн,вт,ср,чт,пт,сб,вс";
+  const sortedDays = params.days.split(",").sort().join(",");
+  const sortedAllDays = allDays.split(",").sort().join(",");
+
+  // Если указаны все дни недели, не показываем поле "Дни"
+  if (sortedDays === sortedAllDays) {
+    return `📝 Текст: ${params.text}\n🕒 Время: ${params.time}\n⏳ Количество отправок: ${reminder.count_in_days}`;
+  } else {
+    return `📝 Текст: ${params.text}\n🕒 Время: ${params.time}\n📅 Дни: ${params.days}\n⏳ Количество отправок: ${reminder.count_in_days}`;
+  }
+}
+
 // Обработчик команды /start
 function handleStart(bot) {
   bot.onText(/\/start/, async (msg) => {
@@ -57,7 +73,7 @@ function handleManual(bot) {
         // Отправляем сообщение об успешном создании с кнопкой удаления
         const sentMessage = await bot.sendMessage(
           chatId,
-          `✅ Напоминание создано!`,
+          `✅ Напоминание создано!\n\n${formatReminderInfo(params, reminder)}`,
           {
             parse_mode: "Markdown",
             reply_markup: replyMarkup,
