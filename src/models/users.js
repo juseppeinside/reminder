@@ -36,7 +36,7 @@ function saveUser(user) {
 // Функция для получения списка всех пользователей
 function getAllUsers() {
   return new Promise((resolve, reject) => {
-    db.all("SELECT id FROM users", (err, users) => {
+    db.all("SELECT * FROM users", (err, users) => {
       if (err) {
         reject(err);
         return;

@@ -66,23 +66,62 @@ function handleUsers(bot) {
         // Получаем количество пользователей
         const userCount = await userModel.getUserCount();
 
-        // Получаем список последних пользователей
-        const users = await userModel.getRecentUsers(10);
+        // Сначала отправим общую информацию о количестве пользователей
+        await bot.sendMessage(chatId, `👥 Всего пользователей: ${userCount}`);
 
-        let message = `Всего пользователей: ${userCount}\n\n`;
+        // Если пользователей много, запросим все данные и разобьем на пакеты
+        if (userCount > 10) {
+          const allUsers = await userModel.getAllUsers();
 
-        if (users.length > 0) {
-          message += "Последние пользователи:\n";
-          users.forEach((user) => {
-            message += `ID: ${user.id}, Username: ${
-              user.username || "-"
-            }, Имя: ${user.first_name || "-"}\n`;
-          });
+          // Разбиваем на пакеты по 50 пользователей
+          const MAX_USERS_PER_MESSAGE = 50;
+          const totalPages = Math.ceil(allUsers.length / MAX_USERS_PER_MESSAGE);
+
+          await bot.sendMessage(
+            chatId,
+            `Информация будет отправлена в ${totalPages} сообщениях.`
+          );
+
+          // Для каждой страницы формируем и отправляем отдельное сообщение
+          for (let page = 0; page < totalPages; page++) {
+            const startIdx = page * MAX_USERS_PER_MESSAGE;
+            const endIdx = Math.min(
+              startIdx + MAX_USERS_PER_MESSAGE,
+              allUsers.length
+            );
+            const pageUsers = allUsers.slice(startIdx, endIdx);
+
+            let message = `📄 Страница ${page + 1} из ${totalPages}\n\n`;
+
+            pageUsers.forEach((user) => {
+              message += `ID: ${user.id}, Username: ${
+                user.username || "-"
+              }, Имя: ${user.first_name || "-"}, Регистрация: ${
+                user.created_at || "-"
+              }\n`;
+            });
+
+            // Добавляем небольшую задержку между сообщениями
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            await bot.sendMessage(chatId, message);
+          }
         } else {
-          message += "Список пользователей пуст.";
-        }
+          // Если пользователей немного, отправляем одним сообщением
+          const users = await userModel.getRecentUsers(10);
 
-        bot.sendMessage(chatId, message);
+          let message = "Последние пользователи:\n";
+          if (users.length > 0) {
+            users.forEach((user) => {
+              message += `ID: ${user.id}, Username: ${
+                user.username || "-"
+              }, Имя: ${user.first_name || "-"}\n`;
+            });
+          } else {
+            message += "Список пользователей пуст.";
+          }
+
+          await bot.sendMessage(chatId, message);
+        }
       } catch (error) {
         console.error("Ошибка при получении списка пользователей:", error);
         bot.sendMessage(chatId, "Ошибка при получении списка пользователей");
@@ -104,29 +143,69 @@ function handleNotification(bot) {
       try {
         const users = await userModel.getAllUsers();
 
+        // Отправляем информацию о начале рассылки
+        await bot.sendMessage(
+          chatId,
+          `📢 Начинаю отправку уведомления ${users.length} пользователям...`
+        );
+
         let sentCount = 0;
-        for (const user of users) {
-          try {
-            await bot.sendMessage(user.id, notificationText);
-            sentCount++;
-          } catch (error) {
-            console.error(
-              `Ошибка отправки сообщения пользователю ${user.id}`,
-              error
+        let errorCount = 0;
+
+        // Разбиваем пользователей на группы по 30 для отображения прогресса
+        const BATCH_SIZE = 30;
+        const totalBatches = Math.ceil(users.length / BATCH_SIZE);
+
+        // Обрабатываем пользователей группами
+        for (let batch = 0; batch < totalBatches; batch++) {
+          const startIdx = batch * BATCH_SIZE;
+          const endIdx = Math.min(startIdx + BATCH_SIZE, users.length);
+          const batchUsers = users.slice(startIdx, endIdx);
+
+          // Отправляем сообщения пользователям в текущей группе
+          for (const user of batchUsers) {
+            try {
+              await bot.sendMessage(user.id, notificationText);
+              sentCount++;
+            } catch (error) {
+              console.error(
+                `Ошибка отправки сообщения пользователю ${user.id}`,
+                error
+              );
+              errorCount++;
+            }
+
+            // Добавляем небольшую задержку между отправками
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+
+          // Если групп больше одной, показываем прогресс
+          if (totalBatches > 1) {
+            await bot.sendMessage(
+              chatId,
+              `✅ Прогресс: ${Math.min(
+                100,
+                Math.round(((batch + 1) * 100) / totalBatches)
+              )}% (отправлено ${sentCount}, ошибок: ${errorCount})`
             );
           }
         }
 
-        bot.sendMessage(
+        // Отправляем итоговый отчет
+        await bot.sendMessage(
           chatId,
-          `Уведомление отправлено ${sentCount} пользователям из ${users.length}`
+          `✅ Рассылка завершена!\n\n` +
+            `📊 Статистика:\n` +
+            `- Всего пользователей: ${users.length}\n` +
+            `- Успешно отправлено: ${sentCount}\n` +
+            `- Ошибок: ${errorCount}`
         );
       } catch (error) {
         console.error("Ошибка при отправке уведомления:", error);
-        bot.sendMessage(chatId, "Ошибка при отправке уведомления");
+        bot.sendMessage(chatId, "❌ Ошибка при отправке уведомления");
       }
     } else {
-      bot.sendMessage(chatId, "У вас нет прав для выполнения этой команды");
+      bot.sendMessage(chatId, "⛔ У вас нет прав для выполнения этой команды");
     }
   });
 }
@@ -183,56 +262,86 @@ function handleList(bot) {
         return;
       }
 
-      let message = "📋 *Ваши уведомления:*\n\n";
+      // Разбиваем список напоминаний на пакеты по 5 напоминаний для отправки
+      const MAX_REMINDERS_PER_MESSAGE = 5;
+      const totalPages = Math.ceil(
+        reminders.length / MAX_REMINDERS_PER_MESSAGE
+      );
 
-      reminders.forEach((reminder) => {
-        // Определяем оставшиеся дни
-        let remainingDays = "";
-        if (reminder.count_in_days === 99999) {
-          remainingDays = "♾️ (бесконечно)";
-        } else {
-          remainingDays = reminder.count_in_days;
-        }
+      // Отправляем краткую информацию о количестве напоминаний
+      await bot.sendMessage(
+        chatId,
+        `📋 *Найдено ${reminders.length} напоминаний*\n` +
+          (totalPages > 1
+            ? `Информация будет отправлена в ${totalPages} сообщениях.`
+            : ""),
+        { parse_mode: "Markdown" }
+      );
 
-        message += `📝 *Сообщение:* ${reminder.text}\n`;
+      // Разбиваем напоминания на пакеты и отправляем
+      for (let page = 0; page < totalPages; page++) {
+        const startIdx = page * MAX_REMINDERS_PER_MESSAGE;
+        const endIdx = Math.min(
+          startIdx + MAX_REMINDERS_PER_MESSAGE,
+          reminders.length
+        );
+        const pageReminders = reminders.slice(startIdx, endIdx);
 
-        // Форматируем время, если оно содержит несколько значений
-        const times = reminder.time.split(",");
-        if (times.length > 1) {
-          message += `🕒 *Время:* ${times.join(", ")}\n`;
-        } else {
-          message += `🕒 *Время:* ${reminder.time}\n`;
-        }
+        let message =
+          totalPages > 1
+            ? `📄 *Страница ${page + 1} из ${totalPages}*\n\n`
+            : "";
 
-        message += `🆔 *ID:* \`${reminder.id}\`\n`;
-        message += `⏳ *Осталось дней:* ${remainingDays}\n`;
+        pageReminders.forEach((reminder) => {
+          // Определяем оставшиеся дни
+          let remainingDays = "";
+          if (reminder.count_in_days === 99999) {
+            remainingDays = "♾️ (бесконечно)";
+          } else {
+            remainingDays = reminder.count_in_days;
+          }
 
-        if (reminder.days && reminder.days !== "пн,вт,ср,чт,пт,сб,вс") {
-          message += `📅 *Дни недели:* ${reminder.days}\n`;
-        }
+          message += `📝 *Сообщение:* ${reminder.text}\n`;
 
-        // Форматируем текст периодичности недель
-        let periodText = "";
-        // Преобразуем к числу, так как в БД хранится как INTEGER
-        const everyWeekValue = parseInt(reminder.every_week);
+          // Форматируем время, если оно содержит несколько значений
+          const times = reminder.time.split(",");
+          if (times.length > 1) {
+            message += `🕒 *Время:* ${times.join(", ")}\n`;
+          } else {
+            message += `🕒 *Время:* ${reminder.time}\n`;
+          }
 
-        if (everyWeekValue === 0) {
-          periodText = "каждую неделю";
-        } else if (everyWeekValue === 1) {
-          periodText = "через неделю";
-        } else if (everyWeekValue >= 2) {
-          periodText = `каждые ${everyWeekValue + 1} недели`;
-        } else {
-          // На случай, если в БД некорректное значение
-          periodText = `${reminder.every_week}`;
-        }
+          message += `🆔 *ID:* \`${reminder.id}\`\n`;
+          message += `⏳ *Осталось дней:* ${remainingDays}\n`;
 
-        message += `🔄 *Периодичность:* ${periodText}\n`;
+          if (reminder.days && reminder.days !== "пн,вт,ср,чт,пт,сб,вс") {
+            message += `📅 *Дни недели:* ${reminder.days}\n`;
+          }
 
-        message += "\n";
-      });
+          // Форматируем текст периодичности недель
+          let periodText = "";
+          // Преобразуем к числу, так как в БД хранится как INTEGER
+          const everyWeekValue = parseInt(reminder.every_week);
 
-      bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+          if (everyWeekValue === 0) {
+            periodText = "каждую неделю";
+          } else if (everyWeekValue === 1) {
+            periodText = "через неделю";
+          } else if (everyWeekValue >= 2) {
+            periodText = `каждые ${everyWeekValue + 1} недели`;
+          } else {
+            // На случай, если в БД некорректное значение
+            periodText = `${reminder.every_week}`;
+          }
+
+          message += `🔄 *Периодичность:* ${periodText}\n`;
+          message += "\n";
+        });
+
+        // Добавляем небольшую задержку между сообщениями, чтобы избежать ограничений API
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+      }
     } catch (error) {
       console.error("Ошибка при получении списка уведомлений:", error);
       bot.sendMessage(chatId, "Ошибка при получении списка уведомлений");
